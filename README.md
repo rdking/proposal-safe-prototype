@@ -20,18 +20,38 @@ It's that 2nd step that's so problematic. The behavior would be as follows:
 * Object values received by accessors are ignored as they represent a calculated result.
 
 Presently, the desired behavior can be approximated with a Membrane around the object attached to `__proto__`. The only differences in behavior are that:
-1. This proposal will not use proxies, and
-2. The membrane cannot flag prototype objects to facilitate the 3rd rule above.
+1. This proposal will not use proxies,
+2. This proposal is expected to work for all objects,
+3. This proposal is expected to "replay" an object definition to produce the copy, and
+4. The membrane example cannot flag prototype objects to facilitate the 3rd rule above.
 
-Below is the Proxy version of the desired behavior.
+Below is an example version of the desired behavior.
 
 ```js
-import from "proposal-inherited-keys";
+if (!("getKnownPropertyDescriptor" in Object)) {
+  Object.defineProperty(Object, "getKnownPropertyDescriptor", {
+    value: function getKnownPropertyDescriptor(obj, prop) {
+      let retval;
+      
+      if (prop in obj) {
+        while (obj && !retval) {
+          retval = Object.getOwnPropertyDescriptor(obj, prop);
+          if (!retval) {
+            obj = Object.getPrototypeOf(obj);
+          }
+        }
+      }
+      
+      return retval;
+    }
+  });
+}
 
 function makeSafeProto(inst) {
-  const ROOT = Symbol("ROOT");
-  const PARENT = Symbol("PARENT");
-  const PROPERTY = Symbol("PROPERTY");
+  const ROOT = Symbol("ROOT");          //Top of the tree for the property
+  const OWNER = Symbol("OWNER");        //Object on which to place copy
+  const PARENT = Symbol("PARENT");      //Copy 1 level up or null if root
+  const PROPERTY = Symbol("PROPERTY");  //Name of the property for this copy
   const knownProtos = [
     Object.prototype,
     Function.prototype,
@@ -46,40 +66,90 @@ function makeSafeProto(inst) {
     return (val && (typeof(val) == "object"));
   }
   
+  function makeInstanceProperty(target) {
+    function copyBack(t) {
+      let {[PARENT]:parent, [PROPERTY]:property} = t;
+      delete target[ROOT];
+      delete target[OWNER];
+      delete target[PARENT];
+      delete target[PROPERTY];
+      parent[property] = target;
+      return parent;
+    }
+  
+    let {[ROOT]:root, [PARENT]:parent, [PROPERTY]:property} = target;
+    while (parent && (parent !== root)) {
+      target = copyBack(target);
+      ({[ROOT]:root, [PARENT]:parent, [PROPERTY]:property} = target);
+    }
+    if (parent === root) {
+      let {[OWNER]:owner} = target;
+      let def = Object.getOwnPropertyDescriptor(parent, property);
+      def.value = target;
+      Object.defineProperty(owner, property, def);
+    }
+  }
+  
   let handler = {
     copies: new WeakMap(),
     get(target, prop, receiver) {
-      let def = Object.getKnownPropertyDefinition(target, prop);
+      let def = Object.getKnownPropertyDescriptor(target, prop);
       let retval = Reflect.get(target, prop, receiver);
+
       if (def && ("value" in def) && isObject(retval)) {
-        let oldProto = Object.getPrototypeOf(retval);
-        let proto = new Proxy(oldProto, handler);
-        retval = Object.assign({}, retval);
-        Object.setPrototypeOf(retval, proto);
-        retval = new Proxy(retval, handler);
+        let isRoot = !handler.copies.has(target);
+        let result = Object.assign({
+          [ROOT]: (isRoot) ? target: handler.copies.get(target)[ROOT],
+          [OWNER]: inst,
+          [PARENT]: (isRoot) ? Object.assign(target, {
+            [OWNER]: inst,
+            [PROPERTY]: prop
+          }) : target,
+          [PROPERTY]: prop
+        }, retval);
+        retval = new Proxy(result, handler);
+        handler.copies.set(result, retval);
       }
-      
+
       return retval;
     },
     set(target, prop, value, receiver) {
-    }
+      let retval = Reflect.set(target, prop, value, receiver);
+      makeInstanceProperty(target);
+      return retval;
+    },
     defineProperty(target, prop, def) {
+      let retval = Reflect.defineProperty(target, prop, def);
+      makeInstanceProperty(target);
+      return retval;
     },
     deleteProperty(target, prop) {
+      let retval = Reflect.deleteProperty(target, prop);
+      makeInstanceProperty(target);
+      return retval;
     },
     preventExtensions(target) {
+      let retval = Reflect.preventExtensions(target);
+      makeInstanceProperty(target);
+      return retval;
     },
     setPrototypeOf(target, prototype) {
+      let retval = Reflect.setPrototypeOf(target, prototype);
+      makeInstanceProperty(target);
+      return retval;
     }
   };
   
-  //Shallow copy the instance...
-  let retval = Object.assign({}, inst);
   //Make the prototype a proxy object
-  let proto = Object.getPrototypeOf(retval);
-  if (
-  Object.setPrototypeOf(retval, new Proxy(proto, handler));
-  handler.set(inst
-  return retval;
+  let proto = Object.getPrototypeOf(inst);
+  //Wrap the prototype to protect its object properties.
+  let newProto = new Proxy(proto, handler);
+  Object.setPrototypeOf(inst, newProto);
+  return inst;
 }
+
+var test = makeSafeProto({a:1, __proto__: {b:2, c: { d:'x'}}});
+console.log(`Before: test = ${JSON.stringify(test, null, '\t')}`);
+test.c.e=1;
+console.log(`After: test = ${JSON.stringify(test, null, '\t')}`);
 ```
