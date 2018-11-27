@@ -3,18 +3,18 @@ An ES proposal to fix the foot-gun of non-function objects in prototypes.
 ---
 
 ## Motivation
-ES is a prototype-based language, but as of late, many new features have been proposed, some of which attempt to obviate the use of the prototype for its intended purpose as the template for an instantiation by `new`. The sole reason is because of the lack of a copy-on-write semantic for prototype properties with a non-function object as the value.
+ES is a prototype-based language, but as of late, many new features have been proposed, some of which attempt to obviate the use of the prototype for its intended purpose as the base object for an instantiation by `new`. The sole reason is because of the lack of a copy-on-write semantic for prototype properties with a non-function object as the value.
 
 ## Solution
-This proposal is fairly straight forward, but may not be easy to implement. The idea is to implement a copy-on-write semantic for any object assigned to `__proto__` of another object. In the interest of preserving as many as possible of the use-cases putting the foot-gun behavior to good use, there are a few limitations.
-* Only objects created via the `new` keyword will receive the new behavior. This excludes the return value of constructors when that value is not `this`.
+This proposal is fairly straight forward, but may not be easy to implement. The idea is to implement a copy-on-write semantic for any object assigned to `__proto__` of another object. In the interest of preserving as many as possible of the use-cases putting the foot-gun behavior to good use, there are a few conditions:
+* A new well-known Symbol must be defined: `Symbol.SafeProto = Symbol("SafeProto")` to mark objects that should exhibit the new behavior.
+* A new well-known Symbol must be defined: `Symbol.UnsafeProto = Symbol("UnsafeProto")` to mark objects that **must not** exhibit the new behavior.
+* All native prototypes must have a `Symbol.UnsafeProto` property.
+* Only objects containing `Symbol.SafeProto` as a key (without regard to value) will receive the new behavior.
 * The new behavior is not affected by `"use strict"`.
 
-## Issues
-There will almost certainly be a few cases where the foot-gun behavior was used constructively on objects created with `new`. However, these occurances are expected to be exceedingly few and far between. The common practice of declaring object properties in the constructor should mean that occurances of the foot-gun behavior are rare enough that this change will not constitute a major behavioral break.
-
 ## Behavior
-It's that 2nd step that's so problematic. The behavior would be as follows:
+The behavior would be as follows:
 * Any object attached to the `prototype` of a function is flagged as a prototype object.
 * Prior to any write attempt on any portion of an object property of `__proto__`, all [[Get]]s return an instance-specific shallow copy of the object. Any nested [[Get]] also returns an instance-specific shallow copy.
 * Nested prototype objects are returned uncopied and break the nested copying process.
@@ -30,6 +30,11 @@ Presently, the desired behavior can be approximated with a Membrane around the o
 Below is an example version of the desired behavior.
 
 ```js
+//Defined to trigger new behavior
+Object.defineProperty(Symbol, "SafeProto", { value: Symbol("SafeProto")});
+//Defined to ensure existing behavior
+Object.defineProperty(Symbol, "UnsafeProto", { value: Symbol("UnsafeProto")});
+
 if (!("getKnownPropertyDescriptor" in Object)) {
   Object.defineProperty(Object, "getKnownPropertyDescriptor", {
     value: function getKnownPropertyDescriptor(obj, prop) {
@@ -54,15 +59,6 @@ function makeSafeProto(inst) {
   const OWNER = Symbol("OWNER");        //Object on which to place copy
   const PARENT = Symbol("PARENT");      //Copy 1 level up or null if root
   const PROPERTY = Symbol("PROPERTY");  //Name of the property for this copy
-  const knownProtos = [
-    Object.prototype,
-    Function.prototype,
-    Array.prototype,
-    Map.prototype,
-    WeakMap.prototype,
-    Set.prototype,
-    WeakSet.prototype
-  ];
   
   function isObject(val) {
     return (val && (typeof(val) == "object"));
@@ -98,7 +94,8 @@ function makeSafeProto(inst) {
       let def = Object.getKnownPropertyDescriptor(target, prop);
       let retval = Reflect.get(target, prop, receiver);
 
-      if (def && ("value" in def) && isObject(retval)) {
+      if (!(Symbol.UnsafeProto in target) && (Symbol.SafeProto in target)
+          && def && ("value" in def) && isObject(retval)) {
         let isRoot = !handler.copies.has(target);
         let result = Object.assign({
           [ROOT]: (isRoot) ? target: handler.copies.get(target)[ROOT],
@@ -107,7 +104,8 @@ function makeSafeProto(inst) {
             [OWNER]: inst,
             [PROPERTY]: prop
           }) : target,
-          [PROPERTY]: prop
+          [PROPERTY]: prop,
+          [Symbol.SafeProto]: true
         }, retval);
         retval = new Proxy(result, handler);
         handler.copies.set(result, retval);
@@ -150,7 +148,7 @@ function makeSafeProto(inst) {
   return inst;
 }
 
-var test = makeSafeProto({a:1, __proto__: {b:2, c: { d:'x'}}});
+var test = makeSafeProto({[Symbol.SafeProto], a:1, __proto__: {b:2, c: { d:'x'}}});
 console.log(`Before: test = ${JSON.stringify(test, null, '\t')}`);
 test.c.e=1;
 console.log(`After: test = ${JSON.stringify(test, null, '\t')}`);
