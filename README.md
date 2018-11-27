@@ -6,10 +6,12 @@ An ES proposal to fix the foot-gun of non-function objects in prototypes.
 ES is a prototype-based language, but as of late, many new features have been proposed, some of which attempt to obviate the use of the prototype for its intended purpose as the template for an instantiation by `new`. The sole reason is because of the lack of a copy-on-write semantic for prototype properties with a non-function object as the value.
 
 ## Solution
-This proposal is fairly straight forward, but may not be easy to implement. It only has 2 parts:
+This proposal is fairly straight forward, but may not be easy to implement. The idea is to implement a copy-on-write semantic for any object assigned to `__proto__` of another object. In the interest of preserving as many as possible of the use-cases putting the foot-gun behavior to good use, there are a few limitations.
+* Only objects created via the `new` keyword will receive the new behavior. This excludes the return value of constructors when that value is not `this`.
+* The new behavior is not affected by `"use strict"`.
 
-1. Implement a `"use safe-proto"` directive in the same fashion as `"use strict"`.
-2. Implement a copy-on-write semantic for any object assigned to `__proto__` of any other object that is enabled by the afore-mentioned new directive.
+## Issues
+There will almost certainly be a few cases where the foot-gun behavior was used constructively on objects created with `new`. However, these occurances are expected to be exceedingly few and far between. The common practice of declaring object properties in the constructor should mean that occurances of the foot-gun behavior are rare enough that this change will not constitute a major behavioral break.
 
 ## Behavior
 It's that 2nd step that's so problematic. The behavior would be as follows:
