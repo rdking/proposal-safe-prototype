@@ -80,6 +80,7 @@ function makeSafeProto(inst) {
       delete target[OWNER];
       delete target[PARENT];
       delete target[PROPERTY];
+      delete target[Symbol.SafeProto];
       parent[property] = target;
       return parent;
     }
