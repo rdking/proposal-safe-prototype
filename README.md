@@ -59,6 +59,15 @@ function makeSafeProto(inst) {
   const OWNER = Symbol("OWNER");        //Object on which to place copy
   const PARENT = Symbol("PARENT");      //Copy 1 level up or null if root
   const PROPERTY = Symbol("PROPERTY");  //Name of the property for this copy
+  const knownProtos = [
+    Object.prototype,
+    Function.prototype,
+    Array.prototype,
+    Map.prototype,
+    WeakMap.prototype,
+    Set.prototype,
+    WeakSet.prototype
+  ];
   
   function isObject(val) {
     return (val && (typeof(val) == "object"));
@@ -89,13 +98,15 @@ function makeSafeProto(inst) {
   }
   
   let handler = {
+    protos: new WeakMap(),
     copies: new WeakMap(),
     get(target, prop, receiver) {
       let def = Object.getKnownPropertyDescriptor(target, prop);
       let retval = Reflect.get(target, prop, receiver);
 
       if (!(Symbol.UnsafeProto in target) && (Symbol.SafeProto in target)
-          && def && ("value" in def) && isObject(retval)) {
+          && (handler.protos.get(target) !== receiver) && def
+          && ("value" in def) && isObject(retval)) {
         let isRoot = !handler.copies.has(target);
         let result = Object.assign({
           [ROOT]: (isRoot) ? target: handler.copies.get(target)[ROOT],
@@ -105,7 +116,7 @@ function makeSafeProto(inst) {
             [PROPERTY]: prop
           }) : target,
           [PROPERTY]: prop,
-          [Symbol.SafeProto]: true
+          [Symbol.SafeProto]: void 0
         }, retval);
         retval = new Proxy(result, handler);
         handler.copies.set(result, retval);
@@ -145,11 +156,25 @@ function makeSafeProto(inst) {
   //Wrap the prototype to protect its object properties.
   let newProto = new Proxy(proto, handler);
   Object.setPrototypeOf(inst, newProto);
+  handler.protos.set(proto, newProto);
   return inst;
 }
 
-var test = makeSafeProto({[Symbol.SafeProto], a:1, __proto__: {b:2, c: { d:'x'}}});
-console.log(`Before: test = ${JSON.stringify(test, null, '\t')}`);
-test.c.e=1;
-console.log(`After: test = ${JSON.stringify(test, null, '\t')}`);
+var test = makeSafeProto({
+  a: 1,
+  __proto__: {
+    [Symbol.SafeProto]: void 0,
+    b:2,
+    c: {
+      d:'x'
+    }
+  }
+});
+console.log(`Before test #1: test = ${JSON.stringify(test, null, '\t')}`);
+test.c.e = 1;
+console.log(`After test #1: test = ${JSON.stringify(test, null, '\t')}`);
+delete test.c;
+console.log(`Before test #2: test = ${JSON.stringify(test, null, '\t')}`);
+Object.getPrototypeOf(test).c.e = 2;
+console.log(`After test #2: test = ${JSON.stringify(test, null, '\t')}`);
 ```
